@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>WeatherMap — Météo sur carte (Dark)</title>
+
+  <!-- Tailwind CDN (Play CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = { theme: { extend: {} }, darkMode: 'class' };</script>
+  <link rel="icon" type="image/png" href="logo.png">
+
+
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html,body,#map{height:100%;}
+    #map{z-index:0}
+    /* Glassmorphism panel */
+    .glass { background: rgba(255,255,255,0.03); backdrop-filter: blur(6px); border: 1px solid rgba(255,255,255,0.06); }
+    /* Wind arrow */
+    .wind-arrow { transition: transform 0.4s ease; transform-origin: center; }
+    /* Search suggestions */
+    #search-suggestions { background: rgba(10,10,10,0.95); }
+    #search-suggestions .item { padding:0.5rem 0.75rem; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.02); }
+    #search-suggestions .item:hover, #search-suggestions .item.active { background: rgba(255,255,255,0.03); }
+    #search-suggestions .muted { color: rgba(200,200,200,0.6); font-size:0.85rem; }
+    /* small responsive tweaks */
+    @media (max-width:640px){ .panel { width:92%; left:4%; right:4%; bottom:12px;} }
+
+    /* Leaflet controls: dark glass style */
+    .leaflet-control { background: rgba(255,255,255,0.03) !important; border: 1px solid rgba(255,255,255,0.06) !important; box-shadow: none !important; color: #ddd !important; }
+    .leaflet-bar a { background: transparent !important; color: #e5e7eb !important; border-radius: 8px !important; width:36px; height:36px; display:flex; align-items:center; justify-content:center; margin:4px; }
+    .leaflet-control-attribution { background: transparent !important; color: rgba(200,200,200,0.6) !important; border: none !important; padding: 4px 6px !important; }
+
+    /* Spinner */
+    .spinner { width:48px; height:48px; border-radius:50%; border:4px solid rgba(255,255,255,0.06); border-top-color: rgba(255,255,255,0.35); animation: spin 1s linear infinite; margin:auto; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Icon area */
+    #icon{ background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); display:flex; align-items:center; justify-content:center; border-radius:12px; }
+
+    /* Adaptive place name: clamps font size and limits to 2 lines with ellipsis */
+    #place{ font-weight:700; font-size:clamp(1rem, 1.8vw, 1.25rem); line-height:1.05; max-height:3rem; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; }
+    #place[title]{ cursor:help; }
+
+    /* Search suggestions */
+    #search-suggestions { background: rgba(10,10,10,0.95); }
+    #search-suggestions .item { padding:0.5rem 0.75rem; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.02); }
+    #search-suggestions .item:hover, #search-suggestions .item.active { background: rgba(255,255,255,0.03); }
+    #search-suggestions .muted { color: rgba(200,200,200,0.6); font-size:0.85rem; }
+
+    /* Mobile tweaks for panel */
+    @media (max-width:640px){ .panel{ left:6px; right:6px; width:auto; padding:12px; } .text-3xl{ font-size:1.6rem; } }
+  </style>
+</head>
+<body class="dark bg-gray-900 text-gray-100 antialiased">
+  <div id="app" class="h-screen w-screen relative">
+    <!-- Header / Controls -->
+    <header class="absolute top-4 left-4 right-4 z-40 flex items-center gap-3">
+      <div class="glass flex items-center gap-3 px-3 py-2 rounded-lg shadow-lg w-full">
+        <div class="flex items-center gap-3">
+          <svg class="w-7 h-7 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 12a10 10 0 1 0 10-10v10z"/></svg>
+          <div>
+            <div id="app-name" class="font-semibold">WeatherMap</div>
+            <div id="app-sub" class="text-xs text-gray-400">Carte sombre • Recherche (Nominatim) • Météo (Open‑Meteo • sans clé)</div>
+          </div>
+        </div>
+
+        <div class="flex-1 relative">
+          <input id="search" autocomplete="off" aria-autocomplete="list" placeholder="Chercher ville, pays, région ou lat,lon (ex: 48.8566,2.3522)" class="w-full bg-transparent outline-none text-sm placeholder-gray-400" />
+          <div id="search-suggestions" class="hidden absolute left-0 right-0 mt-2 bg-gray-800 border border-gray-700 rounded-md shadow-lg z-50 text-sm max-h-56 overflow-auto"></div>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <button id="btn-geo" title="Centrer sur position actuelle" class="p-2 rounded-md hover:bg-white/5"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2v4M12 18v4M4 12h4M16 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/></svg></button>
+          <button id="toggle-wind" title="Activer/Désactiver vent" class="p-2 rounded-md hover:bg-white/5" aria-pressed="true">🌬️</button>
+          <button id="btn-fav" title="Gérer favoris" class="p-2 rounded-md hover:bg-white/5">⭐</button>
+          <button id="btn-help" title="Aide & options" class="p-2 rounded-md hover:bg-white/5">❔</button>
+          <!-- Language switch -->
+          <button id="lang-switch" title="Changer la langue" class="p-2 rounded-md hover:bg-white/5">FR</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Map -->
+    <div id="map" class="absolute inset-0"></div>
+
+    <!-- Weather Panel -->
+    <div id="panel" class="panel glass absolute left-6 bottom-6 z-50 w-96 rounded-xl p-4 shadow-xl transition-transform" style="transform:translateY(0)">
+      <div class="flex items-center gap-4">
+        <div id="icon" class="w-24 h-24 rounded-xl flex items-center justify-center p-2">
+          <div id="icon-inner" class="spinner" style="display:none"></div>
+          <!-- icon loaded dynamically -->
+        </div>
+        <div class="flex-1">
+          <div class="flex items-start justify-between">
+            <div>
+              <div id="place" class="font-bold text-xl">Cliquez sur la carte pour obtenir la météo</div>
+              <div id="desc" class="text-sm text-gray-400 mt-1">Température, humidité, pression, nuages…</div>
+            </div>
+            <div class="text-right">
+              <div id="temp" class="text-4xl font-extrabold">— °C</div>
+              <div id="feels" class="text-xs text-gray-400 mt-1">—</div>
+            </div>
+          </div>
+
+          <div class="mt-3 grid grid-cols-2 gap-3 text-sm text-gray-300">
+            <div id="lbl-humidity">Humidité: <span id="humidity">— %</span></div>
+            <div id="lbl-pressure">Pression: <span id="pressure">— hPa</span></div>
+            <div id="lbl-clouds">Nuages: <span id="clouds">— %</span></div>
+            <div id="lbl-visibility">Visibilité: <span id="visibility">—</span></div>
+            <div id="lbl-wind">Vent: <span id="wind-info">—</span></div>
+            <div class="text-right text-xs text-gray-400" id="updated">—</div>
+          </div>
+
+          <div class="mt-3 flex items-center justify-between">
+            <div></div>
+            <div>
+              <button id="save-fav" class="px-3 py-1 rounded-md bg-blue-600 text-white text-sm">Enregistrer</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hidden modals / forms -->
+    <div id="modal" class="hidden fixed inset-0 z-60 items-center justify-center">
+      <div class="glass p-4 rounded-lg max-w-lg w-full mx-4">
+        <div class="flex items-center justify-between">
+          <div class="font-semibold" id="modal-title">Paramètres</div>
+          <button id="modal-close" class="p-2">✖</button>
+        </div>
+        <div class="mt-3 space-y-3">
+          <div>
+            <label class="text-sm text-gray-300" id="modal-email-label">E-mail de contact (optionnel pour Nominatim)</label>
+            <input id="nominatim-email" class="w-full mt-1 p-2 bg-transparent outline-none border rounded-md" placeholder="votre@exemple.com (optionnel)" />
+            <div class="text-xs text-gray-400 mt-1" id="nominatim-note">Nominatim est un service public : ajoutez un e‑mail pour respecter sa politique d'usage.</div>
+          </div>
+          <div class="flex justify-end gap-2">
+            <button id="modal-save" class="px-4 py-2 bg-green-600 rounded text-white">Sauvegarder</button>
+            <button id="modal-cancel" class="px-4 py-2 rounded border">Annuler</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Simple help popover -->
+    <div id="help" class="hidden fixed right-6 top-20 z-50 glass p-4 rounded-lg w-80 text-sm text-gray-300">
+      <div class="font-semibold" id="help-title">Aide rapide</div>
+      <ul class="mt-2 list-disc pl-4 space-y-1" id="help-list">
+        <li>/ → Focus vers la recherche</li>
+        <li>Cliquez sur la carte pour obtenir la météo</li>
+        <li>Météo fournie par Open‑Meteo (sans clé)</li>
+        <li>Enregistrez lieux favoris (⭐), service worker pour offline est disponible (voir code)</li>
+      </ul>
+    </div>
+
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // --- Translations / i18n ---
+    const TRANSLATIONS = {
+      fr: {
+        app_name: 'WeatherMap',
+        subtitle: 'Carte sombre • Recherche (Nominatim) • Météo (Open‑Meteo • sans clé)',
+        search_placeholder: 'Chercher ville, pays, région ou lat,lon (ex: 48.8566,2.3522)',
+        btn_geo_title: 'Centrer sur position actuelle',
+        toggle_wind_title: 'Activer/Désactiver vent',
+        btn_fav_title: 'Gérer favoris',
+        btn_help_title: 'Aide & options',
+        lang_switch_title: 'Changer la langue',
+        panel_default: 'Cliquez sur la carte pour obtenir la météo',
+        desc_default: 'Température, humidité, pression, nuages…',
+        humidity: 'Humidité', pressure: 'Pression', clouds: 'Nuages', visibility: 'Visibilité', wind: 'Vent',
+        updated: 'Mise à jour:',
+        save: 'Enregistrer',
+        modal_title: 'Paramètres',
+        modal_email_label: 'E-mail de contact (optionnel pour Nominatim)',
+        modal_email_placeholder: 'votre@exemple.com (optionnel)',
+        modal_save: 'Sauvegarder',
+        modal_cancel: 'Annuler',
+        help_title: 'Aide rapide',
+        help_items: ['/ → Focus vers la recherche', 'Cliquez sur la carte pour obtenir la météo', 'Météo fournie par Open‑Meteo (sans clé)', "Enregistrez lieux favoris (⭐), service worker pour offline est disponible (voir code)"],
+        coord_label: 'Coordonnées:',
+        geo_error: "Impossible d'obtenir la position: ",
+        no_favs: 'Aucun favori enregistré',
+        choose_fav: 'Choisir un favori:\n',
+        fav_saved: 'Favori enregistré',
+        place_marker_first: "Placez d'abord un marqueur sur la carte",
+        weather_api_error: 'Erreur API météo (Open-Meteo)',
+        network_error: 'Erreur réseau'
+      },
+      en: {
+        app_name: 'WeatherMap',
+        subtitle: 'Dark map • Search (Nominatim) • Weather (Open‑Meteo • no key)',
+        search_placeholder: 'Search city, country, region or lat,lon (e.g. 48.8566,2.3522)',
+        btn_geo_title: 'Center on current position',
+        toggle_wind_title: 'Toggle wind',
+        btn_fav_title: 'Manage favorites',
+        btn_help_title: 'Help & options',
+        lang_switch_title: 'Change language',
+        panel_default: 'Click on the map to get the weather',
+        desc_default: 'Temperature, humidity, pressure, clouds…',
+        humidity: 'Humidity', pressure: 'Pressure', clouds: 'Clouds', visibility: 'Visibility', wind: 'Wind',
+        updated: 'Updated:',
+        save: 'Save',
+        modal_title: 'Settings',
+        modal_email_label: 'Contact e-mail (optional for Nominatim)',
+        modal_email_placeholder: 'you@example.com (optional)',
+        modal_save: 'Save',
+        modal_cancel: 'Cancel',
+        help_title: 'Quick help',
+        help_items: ['/ → Focus to search', 'Click the map to get weather', 'Weather provided by Open‑Meteo (no key)', 'Save favorite places (⭐), service worker available for offline (see code)'],
+        coord_label: 'Coordinates:',
+        geo_error: 'Unable to get location: ',
+        no_favs: 'No favorites saved',
+        choose_fav: 'Choose a favorite:\n',
+        fav_saved: 'Favorite saved',
+        place_marker_first: 'Place a marker first on the map',
+        weather_api_error: 'Weather API error (Open‑Meteo)',
+        network_error: 'Network error'
+      }
+    };
+
+    // Weather code descriptions: [fr, en, icon]
+    const WEATHER_CODES = {
+      0: ['Ciel dégagé','Clear','☀️'],
+      1: ['Peu nuageux','Mostly clear','🌤️'],
+      2: ['Partiellement nuageux','Partly cloudy','⛅'],
+      3: ['Couvert','Overcast','☁️'],
+      45: ['Brouillard','Fog','🌫️'],
+      48: ['Brouillard verglaçant','Freezing fog','🌫️'],
+      51: ['Bruine légère','Light drizzle','🌧️'],
+      53: ['Bruine modérée','Moderate drizzle','🌧️'],
+      55: ['Bruine dense','Dense drizzle','🌧️'],
+      56: ['Bruine verglaçante','Freezing drizzle','🌧️'],
+      57: ['Bruine verglaçante dense','Dense freezing drizzle','🌧️'],
+      61: ['Pluie faible','Light rain','🌧️'],
+      63: ['Pluie modérée','Moderate rain','🌧️'],
+      65: ['Forte pluie','Heavy rain','🌧️'],
+      66: ['Pluie verglaçante','Freezing rain','🌧️'],
+      67: ['Forte pluie verglaçante','Heavy freezing rain','🌧️'],
+      71: ['Neige faible','Light snow','❄️'],
+      73: ['Neige modérée','Moderate snow','❄️'],
+      75: ['Forte neige','Heavy snow','❄️'],
+      77: ['Grains de neige','Snow grains','❄️'],
+      80: ['Averses faibles','Light showers','🌦️'],
+      81: ['Averses modérées','Moderate showers','🌦️'],
+      82: ['Averses fortes','Violent showers','🌧️'],
+      85: ['Averses de neige','Snow showers','🌨️'],
+      86: ['Forte averse de neige','Heavy snow showers','🌨️'],
+      95: ['Orage','Thunderstorm','⛈️'],
+      96: ['Orage avec grêle','Thunderstorm with hail','⛈️'],
+      99: ['Orage sévère','Severe thunderstorm','⛈️']
+    };
+
+    // Simple, single-file WeatherMap
+    const MAP_START = { lat:20, lon:0, zoom:2 };
+    const map = L.map('map', { zoomControl:true, preferCanvas:true }).setView([MAP_START.lat, MAP_START.lon], MAP_START.zoom);
+
+    // Dark basemap: CARTO Dark Matter (CDN public)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://carto.com">CARTO</a> &mdash; &copy; OpenStreetMap'
+    }).addTo(map);
+
+    // UI elements
+    const searchEl = document.getElementById('search');
+    const suggestionsEl = document.getElementById('search-suggestions');
+    const panel = document.getElementById('panel');
+    const iconEl = document.getElementById('icon');
+    const iconInner = document.getElementById('icon-inner');
+    const placeEl = document.getElementById('place');
+    const descEl = document.getElementById('desc');
+    const tempEl = document.getElementById('temp');
+    const feelsEl = document.getElementById('feels');
+    const humidityEl = document.getElementById('humidity');
+    const pressureEl = document.getElementById('pressure');
+    const cloudsEl = document.getElementById('clouds');
+    const visibilityEl = document.getElementById('visibility');
+    const windInfo = document.getElementById('wind-info');
+    const updatedEl = document.getElementById('updated');
+    const toggleWindBtn = document.getElementById('toggle-wind');
+    const modal = document.getElementById('modal');
+    const modalClose = document.getElementById('modal-close');
+    const modalSave = document.getElementById('modal-save');
+    const modalCancel = document.getElementById('modal-cancel');
+    const nominatimEmailInput = document.getElementById('nominatim-email');
+    const help = document.getElementById('help');
+    const btnHelp = document.getElementById('btn-help');
+    const btnGeo = document.getElementById('btn-geo');
+    const saveFavBtn = document.getElementById('save-fav');
+    const btnFav = document.getElementById('btn-fav');
+    const langSwitchBtn = document.getElementById('lang-switch');
+
+    function showLoading(){ iconInner.style.display = 'block'; iconEl.dataset.hasIcon = 'false'; }
+    function hideLoading(){ iconInner.style.display = 'none'; }
+
+    function degToDir(deg){ if(deg===undefined || deg===null) return '—'; const dirs=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW']; return dirs[Math.round(((deg%360)+360)/22.5)%16]; }
+
+    // i18n helpers
+    let currentLang = localStorage.getItem('wm_lang') || (navigator.language && navigator.language.startsWith('fr') ? 'fr' : 'en');
+    function t(key){ return (TRANSLATIONS[currentLang] && TRANSLATIONS[currentLang][key]) || TRANSLATIONS['en'][key] || key; }
+
+    function applyTranslations(){
+      document.documentElement.lang = currentLang;
+      document.title = `WeatherMap — ${t('subtitle')}`;
+      document.getElementById('app-name').textContent = t('app_name');
+      document.getElementById('app-sub').textContent = t('subtitle');
+      searchEl.placeholder = t('search_placeholder');
+      btnGeo.title = t('btn_geo_title');
+      toggleWindBtn.title = t('toggle_wind_title');
+      btnFav.title = t('btn_fav_title');
+      btnHelp.title = t('btn_help_title');
+      langSwitchBtn.title = t('lang_switch_title');
+      langSwitchBtn.textContent = currentLang.toUpperCase();
+
+      document.getElementById('place').textContent = t('panel_default');
+      document.getElementById('desc').textContent = t('desc_default');
+      document.getElementById('lbl-humidity').firstChild.nodeValue = t('humidity') + ': ';
+      document.getElementById('lbl-pressure').firstChild.nodeValue = t('pressure') + ': ';
+      document.getElementById('lbl-clouds').firstChild.nodeValue = t('clouds') + ': ';
+      document.getElementById('lbl-visibility').firstChild.nodeValue = t('visibility') + ': ';
+      document.getElementById('lbl-wind').firstChild.nodeValue = t('wind') + ': ';
+      updatedEl.textContent = t('updated') + ' —';
+      document.getElementById('save-fav').textContent = t('save');
+
+      document.getElementById('modal-title').textContent = t('modal_title');
+      document.getElementById('modal-email-label').textContent = t('modal_email_label');
+      nominatimEmailInput.placeholder = t('modal_email_placeholder');
+      document.getElementById('modal-save').textContent = t('modal_save');
+      document.getElementById('modal-cancel').textContent = t('modal_cancel');
+      document.getElementById('help-title').textContent = t('help_title');
+
+      const helpList = document.getElementById('help-list');
+      helpList.innerHTML = TRANSLATIONS[currentLang].help_items.map(i=>`<li>${i}</li>`).join('');
+
+      // suggestions 'Coordinates' label may appear; we'll use it when needed
+    }
+
+    function setLanguage(lang){ currentLang = lang; localStorage.setItem('wm_lang', lang); applyTranslations(); }
+
+    // Reverse geocode with accept-language
+    async function reverseGeocode(lat, lon){
+      try{
+        const base = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&accept-language=${currentLang}` + (nominatimEmail? '&email=' + encodeURIComponent(nominatimEmail): '');
+        const res = await fetch(base);
+        if(!res.ok) return null;
+        const j = await res.json();
+        return j.display_name || null;
+      }catch(e){ return null; }
+    }
+
+    // App state
+    let marker = null;
+    let windVisible = true;
+    let nominatimEmail = localStorage.getItem('nominatim_email') || '';
+    let suggestions = [];
+    let suggestionIndex = -1;
+    let lastPlaceName = null;
+    nominatimEmailInput.value = nominatimEmail;
+
+    // Helpers
+    const showModal = (title='Paramètres') => { document.getElementById('modal-title').textContent = title; modal.classList.remove('hidden'); }
+    const hideModal = () => modal.classList.add('hidden');
+
+    function debounce(fn, wait=300){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), wait); }; }
+
+    // Search using Nominatim (OpenStreetMap public)
+    async function geocode(q){
+      if(!q) return [];
+      const base = 'https://nominatim.openstreetmap.org/search?format=json&limit=6&addressdetails=1&accept-language=' + currentLang + '&q=' + encodeURIComponent(q) + (nominatimEmail? '&email=' + encodeURIComponent(nominatimEmail): '');
+      try{
+        const res = await fetch(base);
+        const json = await res.json();
+        return json;
+      }catch(e){ console.warn('Nominatim error', e); return []; }
+    }
+
+    // Animate navigation: dezoom global puis rezoom progressif
+    function fancyFlyTo(lat, lon, targetZoom=12){
+      const orig = map.getZoom();
+      map.flyTo([lat, lon], Math.min(3, orig), {duration:0.8});
+      setTimeout(()=>{
+        map.flyTo([lat, lon], targetZoom, {duration:1.0});
+      }, 900);
+    }
+
+    // Suggestions / autocomplete
+    function renderSuggestions(){
+      if(!suggestions || !suggestions.length){ suggestionsEl.classList.add('hidden'); suggestionsEl.innerHTML = ''; suggestionIndex = -1; return; }
+      suggestionsEl.innerHTML = suggestions.map((s,i)=>`<div class="item" data-idx="${i}" role="option" id="sugg-${i}"><div class="font-medium">${s.display_name.split(',')[0]}</div><div class="muted">${s.display_name}</div></div>`).join('');
+      suggestionsEl.classList.remove('hidden');
+      suggestionIndex = -1;
+      Array.from(suggestionsEl.querySelectorAll('.item')).forEach(el=>el.addEventListener('click', ()=>{ const idx = parseInt(el.dataset.idx); const sel = suggestions[idx]; if(sel) onSuggestionSelect(sel); }));
+    }
+
+    function updateSuggestionActive(){
+      const items = suggestionsEl.querySelectorAll('.item');
+      items.forEach((it, idx)=>{ it.classList.toggle('active', idx===suggestionIndex); if(idx===suggestionIndex) it.scrollIntoView({block:'nearest'}); });
+    }
+
+    async function onSuggestionSelect(s){
+      suggestionsEl.classList.add('hidden');
+      searchEl.value = s.display_name;
+      lastPlaceName = s.display_name;
+      const lat = parseFloat(s.lat); const lon = parseFloat(s.lon);
+      fancyFlyTo(lat, lon, Math.max(8, s.type==='country'?4:12));
+      placeMarker(lat, lon);
+      await loadWeather(lat, lon);
+    }
+
+    const doSuggest = debounce(async (q)=>{
+      if(!q){ suggestionsEl.classList.add('hidden'); return; }
+      const coords = q.split(',').map(s=>parseFloat(s.trim())).filter(n=>!isNaN(n));
+      if(coords.length===2){
+        suggestionsEl.innerHTML = `<div class="item">${t('coord_label')} ${coords[0].toFixed(4)}, ${coords[1].toFixed(4)}</div>`;
+        suggestionsEl.classList.remove('hidden');
+        return;
+      }
+      const res = await geocode(q);
+      suggestions = res || [];
+      renderSuggestions();
+    }, 300);
+
+    searchEl.addEventListener('input', ()=>{ doSuggest(searchEl.value.trim()); });
+
+    // Search UX: keyboard and enter
+    searchEl.addEventListener('keydown', (e)=>{
+      if(e.key === 'Escape'){ suggestionsEl.classList.add('hidden'); suggestionIndex = -1; return; }
+      if(e.key === '/' && document.activeElement !== searchEl){ e.preventDefault(); searchEl.focus(); searchEl.select(); }
+      if(e.key === 'ArrowDown'){ e.preventDefault(); if(suggestions.length){ suggestionIndex = Math.min(suggestionIndex+1, suggestions.length-1); updateSuggestionActive(); } return; }
+      if(e.key === 'ArrowUp'){ e.preventDefault(); if(suggestions.length){ suggestionIndex = Math.max(suggestionIndex-1, 0); updateSuggestionActive(); } return; }
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        const q = searchEl.value.trim();
+        const coords = q.split(',').map(s=>parseFloat(s.trim())).filter(n=>!isNaN(n));
+        if(coords.length===2){ fancyFlyTo(coords[0], coords[1], 12); placeMarker(coords[0], coords[1]); loadWeather(coords[0], coords[1]); suggestionsEl.classList.add('hidden'); return; }
+        if(suggestions.length){ const sel = suggestions[suggestionIndex>=0? suggestionIndex : 0]; if(sel){ onSuggestionSelect(sel); return; } }
+        // fallback: geocode and take first result
+        geocode(q).then(res=>{ if(res && res.length){ onSuggestionSelect(res[0]); } });
+      }
+    });
+
+    // Keyboard shortcut: / to focus search
+    window.addEventListener('keydown', (e)=>{
+      if(e.key === '/' && document.activeElement !== searchEl){ e.preventDefault(); searchEl.focus(); searchEl.select(); }
+      if(e.key === 'Escape'){ searchEl.blur(); hideModal(); help.classList.add('hidden'); }
+    });
+
+    // click map -> get weather
+    map.on('click', onMapClick);
+    async function onMapClick(e){ const lat = e.latlng.lat; const lon = e.latlng.lng; lastPlaceName = null; suggestionsEl.classList.add('hidden'); placeMarker(lat,lon); await loadWeather(lat,lon); }
+
+    function placeMarker(lat,lon){ if(marker) map.removeLayer(marker); marker = L.marker([lat,lon], {draggable:true}).addTo(map); marker.on('dragend', async (ev)=>{ const p = ev.target.getLatLng(); await loadWeather(p.lat, p.lng); }); }
+
+    // Load weather from Open-Meteo (no API key required)
+    async function loadWeather(lat, lon){
+      placeEl.textContent = `${t('panel_default')} (${lat.toFixed(4)}, ${lon.toFixed(4)})`;
+      showLoading();
+      try{
+        const base = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&hourly=relativehumidity_2m,surface_pressure,cloudcover,visibility&timezone=auto`;
+        const res = await fetch(base);
+        if(!res.ok){ placeEl.textContent = t('weather_api_error'); hideLoading(); return; }
+        const data = await res.json();
+        await updatePanelWithOpenMeteo(data, lat, lon, lastPlaceName);
+      }catch(e){ placeEl.textContent = t('network_error'); console.warn(e); }
+      finally{ hideLoading(); }
+    }
+
+    function weatherCodeToDescription(code){
+      const entry = WEATHER_CODES[code];
+      if(!entry) return [currentLang==='fr' ? 'Inconnu' : 'Unknown', '🌈'];
+      const desc = currentLang === 'fr' ? entry[0] : entry[1];
+      return [desc, entry[2]];
+    }
+
+    async function updatePanelWithOpenMeteo(d, lat, lon, placeName){
+      const cw = d.current_weather;
+      const timeIndex = d.hourly && d.hourly.time ? d.hourly.time.indexOf(cw.time) : -1;
+      const humidity = (timeIndex>=0 && d.hourly.relativehumidity_2m) ? d.hourly.relativehumidity_2m[timeIndex] : '—';
+      const pressure = (timeIndex>=0 && d.hourly.surface_pressure) ? d.hourly.surface_pressure[timeIndex] : '—';
+      const clouds = (timeIndex>=0 && d.hourly.cloudcover) ? d.hourly.cloudcover[timeIndex] : '—';
+      const visibility = (timeIndex>=0 && d.hourly.visibility) ? (d.hourly.visibility[timeIndex]/1000).toFixed(1) + ' km' : '—';
+
+      const [desc, icon] = weatherCodeToDescription(cw.weathercode);
+
+      // If we don't have a nice place name from search, try reverse geocoding
+      if(!placeName){
+        const rev = await reverseGeocode(lat, lon);
+        placeName = rev || `${lat.toFixed(3)}, ${lon.toFixed(3)}`;
+      }
+
+      placeEl.textContent = placeName;
+      placeEl.title = placeName;
+      descEl.textContent = desc;
+      tempEl.textContent = `${Math.round(cw.temperature)} °C`;
+      feelsEl.textContent = `${new Date(cw.time).toLocaleString()}`;
+      humidityEl.textContent = (humidity==='—') ? '—' : `${humidity} %`;
+      pressureEl.textContent = (pressure==='—') ? '—' : `${Math.round(pressure)} hPa`;
+      cloudsEl.textContent = (clouds==='—') ? '—' : `${clouds} %`;
+      visibilityEl.textContent = visibility;
+
+      iconEl.innerHTML = `<div class="text-3xl">${icon}</div><div class="mt-1 text-xs text-gray-400">${desc}</div>`;
+      iconEl.dataset.hasIcon = 'true';
+
+      // Wind
+      if(cw.windspeed !== undefined){
+        windInfo.textContent = `${cw.windspeed} m/s • ${cw.winddirection}° (${degToDir(cw.winddirection)})`;
+      } else { windInfo.textContent = '—'; }
+
+      updatedEl.textContent = `${t('updated')} ${new Date().toLocaleTimeString()}`;
+
+      panel.style.transform = 'translateY(0)';
+    }
+
+    // Options
+    toggleWindBtn.addEventListener('click', ()=>{ windVisible = !windVisible; toggleWindBtn.style.opacity = windVisible? '1' : '0.5'; });
+    modalClose.addEventListener('click', hideModal); modalCancel.addEventListener('click', hideModal);
+    modalSave.addEventListener('click', ()=>{ nominatimEmail = nominatimEmailInput.value.trim(); localStorage.setItem('nominatim_email', nominatimEmail); hideModal(); });
+
+    // Geo locate
+    btnGeo.addEventListener('click', ()=>{ if(navigator.geolocation){ navigator.geolocation.getCurrentPosition((p)=>{ fancyFlyTo(p.coords.latitude, p.coords.longitude, 12); placeMarker(p.coords.latitude, p.coords.longitude); loadWeather(p.coords.latitude, p.coords.longitude); }, (err)=>{ alert(t('geo_error') + err.message); }); } else alert(t('geo_error') + 'Unavailable'); });
+
+    // Save favorite
+    saveFavBtn.addEventListener('click', ()=>{
+      if(!marker) return alert(t('place_marker_first'));
+      const p = marker.getLatLng(); const name = placeEl.textContent || `${p.lat.toFixed(3)},${p.lng.toFixed(3)}`;
+      const favs = JSON.parse(localStorage.getItem('wm_favs') || '[]'); favs.push({name,lat:p.lat,lng:p.lng,ts:Date.now()}); localStorage.setItem('wm_favs', JSON.stringify(favs)); alert(t('fav_saved'));
+    });
+
+    // Favorites quick picker
+    btnFav.addEventListener('click', ()=>{
+      const favs = JSON.parse(localStorage.getItem('wm_favs') || '[]');
+      if(!favs.length) return alert(t('no_favs'));
+      const list = favs.map((f,i)=>`${i+1}. ${f.name} (${f.lat.toFixed(3)},${f.lng.toFixed(3)})`).join('\n');
+      const pick = prompt(t('choose_fav') + list + '\n' + (currentLang==='fr' ? 'Entrez le numéro:' : 'Enter number:'));
+      const idx = parseInt(pick) - 1; if(isNaN(idx) || !favs[idx]) return; fancyFlyTo(favs[idx].lat, favs[idx].lng, 12); placeMarker(favs[idx].lat, favs[idx].lng); loadWeather(favs[idx].lat, favs[idx].lng);
+    });
+
+    // Help
+    btnHelp.addEventListener('click', ()=>{ help.classList.toggle('hidden'); });
+
+    // Language switch
+    langSwitchBtn.addEventListener('click', ()=>{ const next = currentLang === 'fr' ? 'en' : 'fr'; setLanguage(next); });
+
+    // Initialize translations and small convenience
+    applyTranslations();
+
+    // Optional: service worker registration commented with instructions
+    // To enable offline caching: serve this file over http(s) and uncomment registration below.
+    /*
+    if('serviceWorker' in navigator){
+      navigator.serviceWorker.register('sw.js').then(()=>console.log('SW registered'))
+    }
+    */
+
+    // Minimal local tests: place initial marker over Paris
+    // placeMarker(48.8566, 2.3522); // uncomment to start on Paris
+
+  </script>
+
+  <!--
+    Instructions:
+      1) Téléchargez ce fichier (weathermap.html)
+      2) Ouvrez-le dans un navigateur moderne (Chrome/Edge/Firefox).
+         - Pour activer Service Worker / cache offline, servez via un serveur local (ex: `python -m http.server`) puis ouvrez via http://localhost:8000
+      3) Cliquez sur la carte pour récupérer la météo (Open‑Meteo, sans clé)
+      4) Cherchez un lieu, ou cliquez sur la carte pour récupérer la météo.
+
+    Notes:
+      - La carte utilise CARTO Dark basemap (CDN public, pas de clé requise)
+      - La recherche géographique utilise Nominatim (OpenStreetMap public). Pour respecter la politique d'usage, ajoutez un e-mail de contact dans les paramètres.
+      - Le script est pensé pour rester simple et extensible (prévisions 7j, couches météo, PWA installable).
+  -->
+</body>
+</html>
